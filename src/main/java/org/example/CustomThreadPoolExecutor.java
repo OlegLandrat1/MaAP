@@ -8,7 +8,7 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.concurrent.locks.Condition;
 
-public class Custom1ThreadPoolExecutor implements CustomExecutor {
+public class CustomThreadPoolExecutor implements CustomExecutor {
 
     final int corePoolSize;
     private final int maxPoolSize;
@@ -17,17 +17,25 @@ public class Custom1ThreadPoolExecutor implements CustomExecutor {
     private final int queueSize;
     private final int minSpareThreads;
 
-    private final BlockingQueue<Runnable> workQueue;
+    // Отдельная очередь для каждого рабочего потока
+    private final List<LinkedBlockingQueue<Runnable>> workerQueues;
+
+    // Глобальная очередь для переполнения (используется когда все локальные очереди полны)
+    private final BlockingQueue<Runnable> globalQueue;
+
     private final List<Worker> workers;
     final AtomicInteger workerCount;
     private final AtomicLong completedTaskCount = new AtomicLong(0);
     private final AtomicBoolean shutdown;
 
+    // Счётчик для Round Robin распределения
+    private final AtomicInteger nextWorkerIndex = new AtomicInteger(0);
+
     final ReentrantLock mainLock;
     private final Condition termination;
     private final ThreadFactory threadFactory;
 
-    public Custom1ThreadPoolExecutor(
+    public CustomThreadPoolExecutor(
             int corePoolSize,
             int maxPoolSize,
             long keepAliveTime,
@@ -48,7 +56,12 @@ public class Custom1ThreadPoolExecutor implements CustomExecutor {
         this.queueSize = queueSize;
         this.minSpareThreads = minSpareThreads;
 
-        this.workQueue = new ArrayBlockingQueue<>(queueSize);
+        // Инициализируем очереди для каждого рабочего потока
+        this.workerQueues = Collections.synchronizedList(new ArrayList<>());
+
+        // Глобальная очередь меньшего размера для резерва
+        this.globalQueue = new LinkedBlockingQueue<>(Math.max(1, queueSize / 4));
+
         this.workers = new ArrayList<>();
         this.workerCount = new AtomicInteger(0);
         this.shutdown = new AtomicBoolean(false);
@@ -78,16 +91,48 @@ public class Custom1ThreadPoolExecutor implements CustomExecutor {
         if (shutdown.get()) {
             throw new RejectedExecutionException("Executor is shutdown");
         }
-        // сначала попытаемся положить в очередь
-        if (tryAddToQueue(command)) {
-            ensureMinSpareThreads();
+
+        // Round Robin распределение по локальным очередям рабочих потоков
+        if (tryDistributeToWorkerQueues(command)) {
             return;
         }
 
-        // если очередь полная, пробуем добавить воркер с rirstTask
+        // Если все локальные очереди заполнены, пытаемся добавить новый поток
         if (!addWorker(command)) {
-            throw new RejectedExecutionException("Очередь полная и достигнуто maxPoolSize");
+            // Если максимум потоков достигнут, добавляем в глобальную очередь
+            if (!globalQueue.offer(command)) {
+                throw new RejectedExecutionException(
+                        "Очередь полная и достигнуто maxPoolSize");
+            }
         }
+
+        ensureMinSpareThreads();
+    }
+
+    /**
+     * Распределяет задачу по локальным очередям рабочих потоков
+     * используя Round Robin алгоритм
+     */
+    private boolean tryDistributeToWorkerQueues(Runnable command) {
+        if (workerQueues.isEmpty()) {
+            return false;
+        }
+
+        int attemptCount = 0;
+        int maxAttempts = workerQueues.size();
+
+        while (attemptCount < maxAttempts) {
+            int index = nextWorkerIndex.getAndIncrement() % workerQueues.size();
+            BlockingQueue<Runnable> queue = workerQueues.get(index);
+
+            // Пытаемся добавить в очередь без блокировки
+            if (queue.offer(command)) {
+                return true;
+            }
+            attemptCount++;
+        }
+
+        return false;
     }
 
     @Override
@@ -107,25 +152,31 @@ public class Custom1ThreadPoolExecutor implements CustomExecutor {
     private boolean addWorker(Runnable firstTask) {
         mainLock.lock();
         try {
-           if (shutdown.get()) return false;
-           if (workerCount.get() >= maxPoolSize) return false;
+            if (shutdown.get()) return false;
+            if (workerCount.get() >= maxPoolSize) return false;
 
-           Worker w = new Worker(firstTask);
-           workers.add(w);
-           workerCount.incrementAndGet();
+            // Создаём отдельную очередь для этого рабочего потока
+            LinkedBlockingQueue<Runnable> workerQueue =
+                    new LinkedBlockingQueue<>(queueSize);
 
-           // Регистрируем воркера и увеличиваем счетчик до старта
-            Thread t = threadFactory.newThread(w);
+            // Если есть firstTask, добавляем её в очередь сразу
+            if (firstTask != null) {
+                workerQueue.offer(firstTask);
+            }
+
+            Worker w = new Worker(workerQueue);
+            workers.add(w);
+            workerQueues.add(workerQueue);
+            workerCount.incrementAndGet();
+
+            Thread t = Executors.defaultThreadFactory().newThread(w);
             w.thread = t;
             t.start();
+
             return true;
         } finally {
             mainLock.unlock();
         }
-    }
-
-    private boolean tryAddToQueue(Runnable r) {
-        return workQueue.offer(r);
     }
 
     private int getIdleWorkerCount() {
@@ -211,42 +262,51 @@ public class Custom1ThreadPoolExecutor implements CustomExecutor {
 
     private final class Worker implements Runnable {
         volatile Thread thread;
-        Runnable firstTask;
+        final BlockingQueue<Runnable> localQueue;
         volatile long lastActivityTime;
-
         final AtomicBoolean busy = new AtomicBoolean(false);
 
-        Worker(Runnable firstTask) {
-            this.firstTask = firstTask;
+        Worker(BlockingQueue<Runnable> localQueue) {
+            this.localQueue = localQueue;
             this.lastActivityTime = System.currentTimeMillis();
         }
 
         @Override
         public void run() {
             try {
-                Runnable task = firstTask;
-                firstTask = null;
+                Runnable task;
 
-                while (task != null || (task = getTask()) != null) {
-                    busy.set(true);
-                    try {
-                        task.run();
-                    } catch (Throwable t) {
-                        t.printStackTrace();
-                    } finally {
-                        busy.set(false);
-                        completedTaskCount.incrementAndGet(); // <-- статистика
-                        task = null;
-                        lastActivityTime = System.currentTimeMillis();
+                // Сначала обрабатываем локальную очередь, затем глобальную
+                while (!shutdown.get() || !localQueue.isEmpty()) {
+                    task = getTask();
+
+                    if (task == null) {
+                        // Проверяем глобальную очередь
+                        task = globalQueue.poll();
+                    }
+
+                    if (task != null) {
+                        busy.set(true);
+                        try {
+                            task.run();
+                        } catch (Throwable t) {
+                            t.printStackTrace();
+                        } finally {
+                            busy.set(false);
+                            completedTaskCount.incrementAndGet();
+                            lastActivityTime = System.currentTimeMillis();
+                        }
+                    } else if (shutdown.get()) {
+                        break;
                     }
                 }
             } finally {
                 mainLock.lock();
                 try {
                     workers.remove(this);
+                    workerQueues.remove(localQueue);
                     int c = workerCount.decrementAndGet();
 
-                    // если shutdown и это был последний воркер — будим shutdown()
                     if (shutdown.get() && c == 0) {
                         termination.signalAll();
                     }
@@ -256,44 +316,34 @@ public class Custom1ThreadPoolExecutor implements CustomExecutor {
             }
         }
 
+        /**
+         * Получает задачу из локальной очереди текущего потока
+         * с учётом таймаута для non-core потоков
+         */
         private Runnable getTask() {
             for (;;) {
                 try {
-                    // Проверяем состояние пула
-                    if (shutdown.get() && workQueue.isEmpty()) {
+                    if (shutdown.get() && localQueue.isEmpty()) {
                         return null;
                     }
 
                     boolean timed = workerCount.get() > corePoolSize;
 
-                    // Пытаемся взять задачу из очереди
                     Runnable task = timed
-                            ? workQueue.poll(keepAliveTime, timeUnit)
-                            : workQueue.take();
+                            ? localQueue.poll(keepAliveTime, timeUnit)
+                            : localQueue.take();
 
                     if (task != null) return task;
-                    // pool()вернул null => таймаут у non-core
+
+                    // Таймаут истёк для non-core потока
                     if (timed) return null;
 
                 } catch (InterruptedException e) {
-                    // Проверяем состояние после прерывания
-                    if (shutdown.get() && workQueue.isEmpty()) {
+                    if (shutdown.get() && localQueue.isEmpty()) {
                         return null;
                     }
                 }
             }
-        }
-
-        private boolean shouldTerminate() {
-            if (workerCount.get() > corePoolSize) {
-                long idleTime = System.currentTimeMillis() - lastActivityTime;
-                return timeUnit.toNanos(keepAliveTime) <= idleTime;
-            }
-            return false;
-        }
-
-        private long taskTimeoutNanos() {
-            return timeUnit.toNanos(keepAliveTime);
         }
     }
 
@@ -322,7 +372,6 @@ public class Custom1ThreadPoolExecutor implements CustomExecutor {
                 }
             }
         }
-
 
         @Override
         public boolean cancel(boolean mayInterruptIfRunning) {
@@ -384,12 +433,4 @@ public class Custom1ThreadPoolExecutor implements CustomExecutor {
             }
         }
     }
-}
-
-// Интерфейс
-interface CustomExecutor extends Executor {
-    void execute(Runnable command);
-    <T> Future<T> submit(Callable<T> callable);
-    void shutdown();
-    boolean shutdownNow();
 }
