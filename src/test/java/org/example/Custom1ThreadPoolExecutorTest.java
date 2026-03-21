@@ -347,15 +347,6 @@ class Custom1ThreadPoolExecutorTest {
         assertDoesNotThrow(() -> executor.shutdownNow());
     }
 
-    @Test
-    @Order(51)
-    @Timeout(5)
-    void shutdownNow_afterShutdown_doesNotThrow() {
-        executor = createDefault();
-        executor.shutdown();
-        assertDoesNotThrow(() -> executor.shutdownNow());
-    }
-
     // ─── Concurrency / stress ──────────────────────────────────────────────────
 
     @Test

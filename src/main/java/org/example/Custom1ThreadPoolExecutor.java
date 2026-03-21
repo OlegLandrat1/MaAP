@@ -100,7 +100,7 @@ public class Custom1ThreadPoolExecutor implements CustomExecutor {
         }
 
         CustomFutureTask<T> ftask = new CustomFutureTask<>(callable);
-        addWorker(ftask);
+        execute(ftask);
         return ftask;
     }
 
@@ -311,19 +311,18 @@ public class Custom1ThreadPoolExecutor implements CustomExecutor {
 
         @Override
         public void run() {
-            if (!isCancelled() && !isDone()) {
-                try {
-                    result = callable.call();
-                } catch (Exception e) {
-                    exception = e;
-                } finally {
-                    synchronized (lock) {
-                        done = true;
-                        lock.notifyAll();
-                    }
+            try {
+                result = callable.call();
+            } catch (Exception e) {
+                exception = e;
+            } finally {
+                synchronized (lock) {
+                    done = true;
+                    lock.notifyAll();
                 }
             }
         }
+
 
         @Override
         public boolean cancel(boolean mayInterruptIfRunning) {
