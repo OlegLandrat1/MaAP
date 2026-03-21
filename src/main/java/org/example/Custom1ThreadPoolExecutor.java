@@ -80,16 +80,14 @@ public class Custom1ThreadPoolExecutor implements CustomExecutor {
         }
         // сначала попытаемся положить в очередь
         if (tryAddToQueue(command)) {
-          // если очередь полная, пробуем добавить воркер с rirstTask
-          if (!addWorker(command)) {
-              throw new RejectedExecutionException("Очередь полная и достигнуто maxPoolSize");
-          }
-        } else {
             ensureMinSpareThreads();
+            return;
         }
 
-        Runnable r = command;
-        addWorker(r);
+        // если очередь полная, пробуем добавить воркер с rirstTask
+        if (!addWorker(command)) {
+            throw new RejectedExecutionException("Очередь полная и достигнуто maxPoolSize");
+        }
     }
 
     @Override
