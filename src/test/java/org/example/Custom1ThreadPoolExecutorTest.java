@@ -151,7 +151,6 @@ class Custom1ThreadPoolExecutorTest {
         // Заполняем очередь
         executor.execute(() -> {});
         executor.execute(() -> {});
-        executor.execute(() -> {});
 
         // Следующая должна отклониться
         assertThrows(RejectedExecutionException.class, () ->

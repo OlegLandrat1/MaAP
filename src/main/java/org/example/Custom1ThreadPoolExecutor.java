@@ -111,6 +111,9 @@ public class Custom1ThreadPoolExecutor implements CustomExecutor {
            if (workerCount.get() >= maxPoolSize) return false;
 
            Worker w = new Worker(firstTask);
+           workers.add(w);
+           workerCount.incrementAndGet();
+
            // Регистрируем воркера и увеличиваем счетчик до старта
             Thread t = threadFactory.newThread(w);
             w.thread = t;
