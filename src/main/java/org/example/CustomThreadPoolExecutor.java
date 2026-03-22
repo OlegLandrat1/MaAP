@@ -11,11 +11,11 @@ import java.util.concurrent.locks.Condition;
 public class CustomThreadPoolExecutor implements CustomExecutor {
 
     final int corePoolSize;
-    private final int maxPoolSize;
-    private final long keepAliveTime;
+    final int maxPoolSize;
+    final long keepAliveTime;
     private final TimeUnit timeUnit;
-    private final int queueSize;
-    private final int minSpareThreads;
+    final int queueSize;
+    final int minSpareThreads;
 
     // Отдельная очередь для каждого рабочего потока
     private final List<LinkedBlockingQueue<Runnable>> workerQueues;
