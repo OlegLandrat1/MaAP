@@ -33,7 +33,7 @@
 Отказ, если и локальные очереди полны, и Worker'ов максимум, и глобальная очередь полна
 
 Рис.1 Алгоритм обработки отказа
-![](/home/oleg/IdeaProjects/MyThreadPool/pictures/Rejected_algorithm.png)
+![rejected](images/rejected_algorithm.png)
 
 ### Распределение задач
 
@@ -83,7 +83,7 @@ private boolean tryDistributeToWorkerQueues(Runnable command) {
 
 Замеры, вычисления и запись метрик в файлы .csv реализованы в классах [PerformanceMeasurement.java](src/main/java/org/example/PerformanceMeasurement.java) и [StandardThreadPool.java](src/main/java/org/example/StandardThreadPool.java) для CustomThreadPool и стандартного ThreadPool соответственно.
 Результаты сравнительного анализа представлены на графиках 1-4:
-![](/home/oleg/IdeaProjects/MyThreadPool/pictures/png1.PNG)
-![](/home/oleg/IdeaProjects/MyThreadPool/pictures/png2.PNG)
-![](/home/oleg/IdeaProjects/MyThreadPool/pictures/png3.PNG)
-![](/home/oleg/IdeaProjects/MyThreadPool/pictures/png4.PNG)
+![1](images/png1.PNG)
+![2](images/png2.PNG)
+![3](images/png3.PNG)
+![4](images/png4.PNG)
